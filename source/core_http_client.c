@@ -316,6 +316,7 @@ static void initializeParsingContextForFirstResponse( HTTPParsingContext_t * pPa
  * @param[in,out] pParsingContext The response parsing state.
  * @param[in,out] pResponse The response information to be updated.
  * @param[in] parseLen The next length to parse in pResponse->pBuffer.
+ * @param[in] isClosed Set to 1 if the peer has closed the connection.
  *
  * @return One of the following:
  * - #HTTPSuccess
@@ -324,7 +325,8 @@ static void initializeParsingContextForFirstResponse( HTTPParsingContext_t * pPa
  */
 static HTTPStatus_t parseHttpResponse( HTTPParsingContext_t * pParsingContext,
                                        HTTPResponse_t * pResponse,
-                                       size_t parseLen );
+                                       size_t parseLen,
+                                       unsigned int isClosed );
 
 /**
  * @brief Callback invoked during llhttp_execute() to indicate the start of
@@ -1123,7 +1125,8 @@ static HTTPStatus_t processLlhttpError( const llhttp_t * pHttpParser )
 
 static HTTPStatus_t parseHttpResponse( HTTPParsingContext_t * pParsingContext,
                                        HTTPResponse_t * pResponse,
-                                       size_t parseLen )
+                                       size_t parseLen,
+                                       unsigned int isClosed )
 {
     HTTPStatus_t returnStatus;
     const char * parsingStartLoc = NULL;
@@ -1178,6 +1181,15 @@ static HTTPStatus_t parseHttpResponse( HTTPParsingContext_t * pParsingContext,
     if( eReturn == HPE_PAUSED_UPGRADE )
     {
         llhttp_resume_after_upgrade( &( pParsingContext->llhttpParser ) );
+    }
+
+    /* Finish parsing if the connection has been closed by the server after
+     * the response has been sent. This is only relevant if the response
+     * does not include a Content-Length header nor uses chunked transfer
+     * encoding. */
+    if( llhttp_message_needs_eof( &( pParsingContext->llhttpParser ) ) && ( isClosed == 1U ) )
+    {
+        ( void ) llhttp_finish( &( pParsingContext->llhttpParser ) );
     }
 
     /* The next location to parse will always be after what has already
@@ -1993,6 +2005,7 @@ HTTPStatus_t HTTPClient_ReceiveAndParseHttpResponse( const TransportInterface_t 
     uint8_t shouldRecv = 1U, shouldParse = 1U, timeoutReached = 0U;
     uint32_t lastRecvTimeMs = 0U, timeSinceLastRecvMs = 0U;
     uint32_t retryTimeoutMs = HTTP_RECV_RETRY_TIMEOUT_MS;
+    unsigned int isClosed = 0U;
 
     assert( pTransport != NULL );
     assert( pTransport->recv != NULL );
@@ -2019,7 +2032,8 @@ HTTPStatus_t HTTPClient_ReceiveAndParseHttpResponse( const TransportInterface_t 
         /* Receive the HTTP response data into the pResponse->pBuffer. */
         currentReceived = pTransport->recv( pTransport->pNetworkContext,
                                             pResponse->pBuffer + totalReceived,
-                                            pResponse->bufferLen - totalReceived );
+                                            pResponse->bufferLen - totalReceived,
+                                            &isClosed );
 
         /* Transport receive errors are negative. */
         if( currentReceived < 0 )
@@ -2050,7 +2064,7 @@ HTTPStatus_t HTTPClient_ReceiveAndParseHttpResponse( const TransportInterface_t 
         {
             timeSinceLastRecvMs = pResponse->getTime() - lastRecvTimeMs;
             /* Do not invoke the response parsing for intermediate zero data. */
-            shouldParse = 0U;
+            shouldParse = ( isClosed == 1U ) ? 1U : 0U;
 
             /* Check if the allowed elapsed time between non-zero data has been
              * reached. */
@@ -2073,7 +2087,8 @@ HTTPStatus_t HTTPClient_ReceiveAndParseHttpResponse( const TransportInterface_t 
              * know that the value is greater than 0 we don't need to worry about int overflow. */
             returnStatus = parseHttpResponse( &parsingContext,
                                               pResponse,
-                                              ( uint64_t ) currentReceived );
+                                              ( uint64_t ) currentReceived,
+                                              isClosed );
         }
 
         /* Reading should continue if there are no errors in the transport receive

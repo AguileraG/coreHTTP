@@ -207,6 +207,7 @@ typedef struct NetworkContext NetworkContext_t;
  * @param[in] pNetworkContext Implementation-defined network context.
  * @param[in] pBuffer Buffer to receive the data into.
  * @param[in] bytesToRecv Number of bytes requested from the network.
+ * @param[out] isClosed Set to 1 if the peer has closed the connection.
  *
  * @return The number of bytes received or a negative value to indicate
  * error.
@@ -220,7 +221,8 @@ typedef struct NetworkContext NetworkContext_t;
 /* @[define_transportrecv] */
 typedef int32_t ( * TransportRecv_t )( NetworkContext_t * pNetworkContext,
                                        void * pBuffer,
-                                       size_t bytesToRecv );
+                                       size_t bytesToRecv,
+                                       unsigned int * isClosed );
 /* @[define_transportrecv] */
 
 /**
